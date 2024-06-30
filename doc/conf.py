@@ -33,11 +33,12 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
+    "sphinx_reredirects",
     "nbsphinx",
     "nbsphinx_link",
     #    'sphinx.ext.pngmath',
     #    'sphinxcontrib.tikz',
-    #'rinoh.frontend.sphinx',
+    # 'rinoh.frontend.sphinx',
     "sphinx.ext.imgconverter",  # for SVG conversion
 ]
 
@@ -60,8 +61,8 @@ master_doc = "index"
 
 # General information about the project.
 project = "PyPSA"
-copyright = "2015-2024 PyPSA Developers, see https://pypsa.readthedocs.io/en/latest/developers.html"
-author = "PyPSA Developers, see https://pypsa.readthedocs.io/en/latest/developers.html"
+copyright = "2015-2024 PyPSA Developers, see https://pypsa.readthedocs.io/en/latest/references/developers.html"
+author = "PyPSA Developers, see https://pypsa.readthedocs.io/en/latest/references/developers.html"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -226,10 +227,16 @@ htmlhelp_basename = "PyPSAdoc"
 # nbsphinx_kernel_name = 'pypsa'
 nbsphinx_prolog = """
 {% set docname = env.doc2path(env.docname, base=None).replace("nblink", "ipynb").replace("examples/", "examples/notebooks/") %}
+{% if env.config.release != 'master' %}
+    {% set binder_url = 'https://mybinder.org/v2/gh/PyPSA/pypsa/v' + env.config.release + '?labpath=' + docname %}
+{% else %}
+    {% set binder_url = 'https://mybinder.org/v2/gh/PyPSA/pypsa/' + env.config.release + '?labpath=' + docname %}
+{% endif %}
+
 .. note::
 
-    You can `download <https://github.com/pypsa/pypsa/tree/v{{ env.config.release|e }}/{{ docname }}>`_ this example as a Jupyter notebook
-    or start it `in interactive mode <https://mybinder.org/v2/gh/PyPSA/pypsa/v{{ env.config.release|e }}?labpath={{ docname|e }}>`_.
+    You can `download <https://github.com/pypsa/pypsa/tree/{{ env.config.release|e }}/{{ docname }}>`_ this example as a Jupyter notebook
+    or start it `in interactive mode <{{ binder_url }}>`_.
 
 """
 
@@ -240,13 +247,13 @@ nbsphinx_allow_errors = True
 
 latex_elements = {
     # The paper size ('letterpaper' or 'a4paper').
-    #'papersize': 'letterpaper',
+    # 'papersize': 'letterpaper',
     # The font size ('10pt', '11pt' or '12pt').
-    #'pointsize': '10pt',
+    # 'pointsize': '10pt',
     # Additional stuff for the LaTeX preamble.
-    #'preamble': '',
+    # 'preamble': '',
     # Latex figure (float) alignment
-    #'figure_align': 'htbp',
+    # 'figure_align': 'htbp',
 }
 
 # Grouping the document tree into LaTeX files. List of tuples
@@ -331,3 +338,37 @@ texinfo_documents = [
 
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
+
+redirects = {
+    # Redirects from old/ similar urls to new ones
+    # Getting Started
+    "introduction.html": "getting-started/introduction.html",
+    "installation.html": "getting-started/installation.html",
+    "setup.html": "getting-started/installation.html",
+    "quick_start.html": "getting-started/quick-start.html",
+    "quick-start.html": "getting-started/quick-start.html",
+    "examples-basic.html": "getting-started/examples-basic.html",
+    # User Guide
+    "design.html": "user-guide/design.html",
+    "components.html": "user-guide/components.html",
+    "import_export.html": "user-guide/import-export.html",
+    "power_flow.html": "user-guide/power-flow.html",
+    "optimal_power_flow.html": "user-guide/optimal-power-flow.html",
+    "contingency_analysis.html": "user-guide/contingency-analysis.html",
+    "plotting.html": "user-guide/plotting.html",
+    # Contributing
+    "contributing.html": "contributing/contributing.html",
+    "support.html": "contributing/support.html",
+    "troubleshooting.html": "contributing/troubleshooting.html",
+    "mailing_list.html": "contributing/mailing-list.html",
+    # References
+    "api_reference.html": "references/api-reference.html",
+    "api-reference.html": "references/api-reference.html",
+    "api.html": "references/api-reference.html",
+    "release_notes.html": "references/release-notes.html",
+    "release-notes.html": "references/release-notes.html",
+    "comparable_software.html": "references/comparable-software.html",
+    "citing.html": "references/citing.html",
+    "users.html": "references/users.html",
+    "developers.html": "references/developers.html",
+}
