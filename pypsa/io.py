@@ -14,6 +14,8 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.request import urlretrieve
 
+from pypsa.utils import deprecated_common_kwargs
+
 try:
     from cloudpathlib import AnyPath as Path
 except ImportError:
@@ -24,6 +26,7 @@ import numpy as np
 import pandas as pd
 import validators
 import xarray as xr
+from deprecation import deprecated
 from pyproj import CRS
 
 from pypsa.descriptors import update_linkports_component_attrs
@@ -478,8 +481,9 @@ class ExporterNetCDF(Exporter):
                 self.ds.to_netcdf(_path)
 
 
+@deprecated_common_kwargs
 def _export_to_exporter(
-    network: Network,
+    n: Network,
     exporter: Exporter,
     basename: str | None = None,
     export_standard_types: bool = False,
@@ -507,91 +511,90 @@ def _export_to_exporter(
 
     # first export network properties
     _attrs = {
-        attr: getattr(network, attr)
-        for attr in dir(network)
-        if (
-            not attr.startswith("__")
-            and isinstance(getattr(network, attr), allowed_types)
-        )
+        attr: getattr(n, attr)
+        for attr in dir(n)
+        if (not attr.startswith("__") and isinstance(getattr(n, attr), allowed_types))
     }
     exporter.save_attributes(_attrs)
 
     crs = {}
-    if network.crs is not None:
-        crs["_crs"] = network.crs.to_wkt()
+    if n.crs is not None:
+        crs["_crs"] = n.crs.to_wkt()
     exporter.save_crs(crs)
 
-    exporter.save_meta(network.meta)
+    exporter.save_meta(n.meta)
 
     # now export snapshots
-    if isinstance(network.snapshot_weightings.index, pd.MultiIndex):
-        network.snapshot_weightings.index.rename(["period", "timestep"], inplace=True)
+    if isinstance(n.snapshot_weightings.index, pd.MultiIndex):
+        n.snapshot_weightings.index.rename(["period", "timestep"], inplace=True)
     else:
-        network.snapshot_weightings.index.rename("snapshot", inplace=True)
-    snapshots = network.snapshot_weightings.reset_index()
+        n.snapshot_weightings.index.rename("snapshot", inplace=True)
+    snapshots = n.snapshot_weightings.reset_index()
     exporter.save_snapshots(snapshots)
 
     # export investment period weightings
-    investment_periods = network.investment_period_weightings
+    investment_periods = n.investment_period_weightings
     exporter.save_investment_periods(investment_periods)
 
     exported_components = []
-    for component in network.all_components - {"SubNetwork"}:
-        list_name = network.components[component]["list_name"]
-        attrs = network.components[component]["attrs"]
+    for component in n.all_components - {"SubNetwork"}:
+        list_name = n.components[component]["list_name"]
+        attrs = n.components[component]["attrs"]
 
-        df = network.df(component)
-        pnl = network.pnl(component)
+        static = n.static(component)
+        dynamic = n.dynamic(component)
 
         if component == "Shape":
-            df = pd.DataFrame(df).assign(geometry=df["geometry"].to_wkt())
+            static = pd.DataFrame(static).assign(geometry=static["geometry"].to_wkt())
 
-        if not export_standard_types and component in network.standard_type_components:
-            df = df.drop(network.components[component]["standard_types"].index)
+        if not export_standard_types and component in n.standard_type_components:
+            static = static.drop(n.components[component]["standard_types"].index)
 
         # first do static attributes
-        df = df.rename_axis(index="name")
-        if df.empty:
+        static = static.rename_axis(index="name")
+        if static.empty:
             exporter.remove_static(list_name)
             continue
 
         col_export = []
-        for col in df.columns:
+        for col in static.columns:
             # do not export derived attributes
             if col in ["sub_network", "r_pu", "x_pu", "g_pu", "b_pu"]:
                 continue
             if (
                 col in attrs.index
                 and pd.isnull(attrs.at[col, "default"])
-                and pd.isnull(df[col]).all()
+                and pd.isnull(static[col]).all()
             ):
                 continue
             if (
                 col in attrs.index
-                and df[col].dtype == attrs.at[col, "dtype"]
-                and (df[col] == attrs.at[col, "default"]).all()
+                and static[col].dtype == attrs.at[col, "dtype"]
+                and (static[col] == attrs.at[col, "default"]).all()
             ):
                 continue
 
             col_export.append(col)
 
-        exporter.save_static(list_name, df[col_export])
+        exporter.save_static(list_name, static[col_export])
 
         # now do varying attributes
-        for attr in pnl:
+        for attr in dynamic:
             if attr not in attrs.index:
-                col_export = pnl[attr].columns
+                col_export = dynamic[attr].columns
             else:
                 default = attrs.at[attr, "default"]
 
                 if pd.isnull(default):
-                    col_export = pnl[attr].columns[(~pd.isnull(pnl[attr])).any()]
+                    col_export = dynamic[attr].columns[
+                        (~pd.isnull(dynamic[attr])).any()
+                    ]
                 else:
-                    col_export = pnl[attr].columns[(pnl[attr] != default).any()]
+                    col_export = dynamic[attr].columns[(dynamic[attr] != default).any()]
 
             if len(col_export) > 0:
-                df = pnl[attr].reset_index()[col_export]
-                exporter.save_series(list_name, attr, df)
+                static = dynamic[attr].reset_index()[col_export]
+                exporter.save_series(list_name, attr, static)
             else:
                 exporter.remove_series(list_name, attr)
 
@@ -602,8 +605,9 @@ def _export_to_exporter(
     )
 
 
+@deprecated_common_kwargs
 def import_from_csv_folder(
-    network: Network,
+    n: Network,
     csv_folder_name: str | Path,
     encoding: str | None = None,
     skip_time: bool = False,
@@ -626,15 +630,16 @@ def import_from_csv_folder(
 
     Examples
     --------
-    >>> network.import_from_csv_folder(csv_folder_name)
+    >>> n.import_from_csv_folder(csv_folder_name)
     """
     basename = Path(csv_folder_name).name
     with ImporterCSV(csv_folder_name, encoding=encoding) as importer:
-        _import_from_importer(network, importer, basename=basename, skip_time=skip_time)
+        _import_from_importer(n, importer, basename=basename, skip_time=skip_time)
 
 
+@deprecated_common_kwargs
 def export_to_csv_folder(
-    network: Network,
+    n: Network,
     csv_folder_name: str,
     encoding: str | None = None,
     export_standard_types: bool = False,
@@ -669,22 +674,21 @@ def export_to_csv_folder(
 
     Examples
     --------
-    >>> network.export_to_csv_folder(csv_folder_name)
+    >>> n.export_to_csv_folder(csv_folder_name)
     """
 
     basename = os.path.basename(csv_folder_name)
     with ExporterCSV(csv_folder_name=csv_folder_name, encoding=encoding) as exporter:
         _export_to_exporter(
-            network,
+            n,
             exporter,
             basename=basename,
             export_standard_types=export_standard_types,
         )
 
 
-def import_from_hdf5(
-    network: Network, path: str | Path, skip_time: bool = False
-) -> None:
+@deprecated_common_kwargs
+def import_from_hdf5(n: Network, path: str | Path, skip_time: bool = False) -> None:
     """
     Import network data from HDF5 store at `path`.
 
@@ -698,11 +702,12 @@ def import_from_hdf5(
     basename = Path(path).name
 
     with ImporterHDF5(path) as importer:
-        _import_from_importer(network, importer, basename=basename, skip_time=skip_time)
+        _import_from_importer(n, importer, basename=basename, skip_time=skip_time)
 
 
+@deprecated_common_kwargs
 def export_to_hdf5(
-    network: Network,
+    n: Network,
     path: Path | str,
     export_standard_types: bool = False,
     **kwargs: Any,
@@ -730,22 +735,23 @@ def export_to_hdf5(
 
     Examples
     --------
-    >>> network.export_to_hdf5(filename)
+    >>> n.export_to_hdf5(filename)
     """
     kwargs.setdefault("complevel", 4)
 
     basename = os.path.basename(path)
     with ExporterHDF5(path, **kwargs) as exporter:
         _export_to_exporter(
-            network,
+            n,
             exporter,
             basename=basename,
             export_standard_types=export_standard_types,
         )
 
 
+@deprecated_common_kwargs
 def import_from_netcdf(
-    network: Network, path: str | Path | xr.Dataset, skip_time: bool = False
+    n: Network, path: str | Path | xr.Dataset, skip_time: bool = False
 ) -> None:
     """
     Import network data from netCDF file or xarray Dataset at `path`.
@@ -762,11 +768,12 @@ def import_from_netcdf(
     """
     basename = "" if isinstance(path, xr.Dataset) else Path(path).name
     with ImporterNetCDF(path=path) as importer:
-        _import_from_importer(network, importer, basename=basename, skip_time=skip_time)
+        _import_from_importer(n, importer, basename=basename, skip_time=skip_time)
 
 
+@deprecated_common_kwargs
 def export_to_netcdf(
-    network: Network,
+    n: Network,
     path: str | None = None,
     export_standard_types: bool = False,
     compression: dict | None = None,
@@ -784,7 +791,7 @@ def export_to_netcdf(
     is still returned.
 
     Be aware that this cannot export boolean attributes on the Network
-    class, e.g. network.my_bool = False is not supported by netCDF.
+    class, e.g. n.my_bool = False is not supported by netCDF.
 
     Parameters
     ----------
@@ -809,12 +816,12 @@ def export_to_netcdf(
 
     Examples
     --------
-    >>> network.export_to_netcdf("my_file.nc")
+    >>> n.export_to_netcdf("my_file.nc")
     """
     basename = os.path.basename(path) if path is not None else None
     with ExporterNetCDF(path, compression, float32) as exporter:
         _export_to_exporter(
-            network,
+            n,
             exporter,
             basename=basename,
             export_standard_types=export_standard_types,
@@ -822,8 +829,9 @@ def export_to_netcdf(
         return exporter.ds
 
 
+@deprecated_common_kwargs
 def _import_from_importer(
-    network: Network, importer: Any, basename: str, skip_time: bool = False
+    n: Network, importer: Any, basename: str, skip_time: bool = False
 ) -> None:
     """
     Import network data from importer.
@@ -834,18 +842,18 @@ def _import_from_importer(
         Skip importing time
     """
     attrs = importer.get_attributes()
-    network.meta = importer.get_meta()
+    n.meta = importer.get_meta()
     crs = importer.get_crs()
     crs = crs.pop("_crs", None)
     if crs is not None:
         crs = CRS.from_wkt(crs)
-        network._crs = crs
+        n._crs = crs
 
-    current_pypsa_version = [int(s) for s in network.pypsa_version.split(".")]
+    current_pypsa_version = [int(s) for s in n.pypsa_version.split(".")]
     pypsa_version = None
 
     if attrs is not None:
-        network.name = attrs.pop("name")
+        n.name = attrs.pop("name")
 
         try:
             pypsa_version = [int(s) for s in attrs.pop("pypsa_version").split(".")]
@@ -853,7 +861,7 @@ def _import_from_importer(
             pypsa_version = None
 
         for attr, val in attrs.items():
-            setattr(network, attr, val)
+            setattr(n, attr, val)
 
     ## https://docs.python.org/3/tutorial/datastructures.html#comparing-sequences-and-other-types
     if pypsa_version is None or pypsa_version < current_pypsa_version:
@@ -870,7 +878,7 @@ def _import_from_importer(
         logger.warning(msg)
 
     if pypsa_version is None or pypsa_version < [0, 18, 0]:
-        network._multi_invest = 0
+        n._multi_invest = 0
 
     importer.pypsa_version = pypsa_version
     importer.current_pypsa_version = current_pypsa_version
@@ -883,35 +891,31 @@ def _import_from_importer(
             df.columns
         ):
             df.set_index(sorted(snapshot_levels), inplace=True)
-        network.set_snapshots(df.index)
+        n.set_snapshots(df.index)
 
         cols = ["objective", "generators", "stores"]
         if not df.columns.intersection(cols).empty:
-            network.snapshot_weightings = df.reindex(
-                index=network.snapshots, columns=cols
-            )
+            n.snapshot_weightings = df.reindex(index=n.snapshots, columns=cols)
         elif "weightings" in df.columns:
-            network.snapshot_weightings = df["weightings"].reindex(network.snapshots)
+            n.snapshot_weightings = df["weightings"].reindex(n.snapshots)
 
-        network.set_snapshots(df.index)
+        n.set_snapshots(df.index)
 
     # read in investment period weightings
     periods = importer.get_investment_periods()
 
     if periods is not None:
-        network._investment_periods = periods.index
+        n._investment_periods = periods.index
 
-        network._investment_period_weightings = periods.reindex(
-            network.investment_periods
-        )
+        n._investment_period_weightings = periods.reindex(n.investment_periods)
 
     imported_components = []
 
     # now read in other components; make sure buses and carriers come first
     for component in ["Bus", "Carrier"] + sorted(
-        network.all_components - {"Bus", "Carrier", "SubNetwork"}
+        n.all_components - {"Bus", "Carrier", "SubNetwork"}
     ):
-        list_name = network.components[component]["list_name"]
+        list_name = n.components[component]["list_name"]
 
         df = importer.get_static(list_name)
         if df is None:
@@ -921,34 +925,71 @@ def _import_from_importer(
             continue
 
         if component == "Link":
-            update_linkports_component_attrs(network, where=df)
+            update_linkports_component_attrs(n, where=df)
 
-        import_components_from_dataframe(network, df, component)
+        _import_components_from_df(n, df, component)
 
         if not skip_time:
             for attr, df in importer.get_series(list_name):
-                df.set_index(network.snapshots, inplace=True)
-                import_series_from_dataframe(network, df, component, attr)
+                df.set_index(n.snapshots, inplace=True)
+                _import_series_from_df(n, df, component, attr)
 
-        logger.debug(getattr(network, list_name))
+        logger.debug(getattr(n, list_name))
 
         imported_components.append(list_name)
 
     logger.info(
-        f"Imported network {str(basename or network.name or '<unnamed>')} "
+        f"Imported network {str(basename or n.name or '<unnamed>')} "
         f"has {', '.join(imported_components)}"
     )
 
 
+def _sort_attrs(df: pd.DataFrame, attrs_list: list[str], axis: int) -> pd.DataFrame:
+    """
+    Sort axis of DataFrame according to the order of attrs_list.
+
+    Attributes not in attrs_list are appended at the end. Attributes in the list but
+    not in the DataFrame are ignored.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame to sort
+    attrs_list : list
+        List of attributes to sort by
+    axis : int
+        Axis to sort (0 for index, 1 for columns)
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+
+    df_cols_set = set(df.columns if axis == 1 else df.index)
+
+    existing_cols = [col for col in attrs_list if col in df_cols_set]
+    remaining_cols = list(df_cols_set - set(attrs_list))
+
+    return df.reindex(existing_cols + remaining_cols, axis=axis)
+
+
+@deprecated(
+    deprecated_in="0.29",
+    removed_in="1.0",
+    details="Use `n.add` instead. E.g. `n.add(class_name, df.index, **df)`.",
+)
 def import_components_from_dataframe(
-    network: Network, dataframe: pd.DataFrame, cls_name: str
+    n: Network, dataframe: pd.DataFrame, cls_name: str
 ) -> None:
     """
     Import components from a pandas DataFrame.
 
-    If columns are missing then defaults are used.
+    This function is deprecated. Use :py:meth`pypsa.Network.add` instead. To get the
+    same behavior for importing components from a DataFrame, use
+    `n.add(cls_name, df.index, **df)`.
 
-    If extra columns are added, these are left in the resulting component dataframe.
+    If columns are missing then defaults are used. If extra columns are added, these
+    are left in the resulting component dataframe.
 
     Parameters
     ----------
@@ -962,101 +1003,43 @@ def import_components_from_dataframe(
     --------
     >>> import pandas as pd
     >>> buses = ['Berlin', 'Frankfurt', 'Munich', 'Hamburg']
-    >>> network.import_components_from_dataframe(
-            pd.DataFrame({"v_nom" : 380, "control" : 'PV'},
-                        index=buses),
-                        "Bus")
-    >>> network.import_components_from_dataframe(
-            pd.DataFrame({"carrier" : "solar", "bus" : buses, "p_nom_extendable" : True},
-                        index=[b+" PV" for b in buses]),
-                        "Generator")
+    >>> n.import_components_from_dataframe(
+    ...     pd.DataFrame({"v_nom" : 380, "control" : 'PV'},
+    ...                 index=buses),
+    ...                 "Bus")
+    >>> n.import_components_from_dataframe(
+    ...     pd.DataFrame({"carrier" : "solar", "bus" : buses, "p_nom_extendable" : True},
+    ...                 index=[b+" PV" for b in buses]),
+    ...                 "Generator")
 
     See Also
     --------
     pypsa.Network.madd
     """
-    attrs = network.components[cls_name]["attrs"]
-
-    static_attrs = attrs[attrs.static].drop("name")
-    non_static_attrs = attrs[~attrs.static]
-
-    if cls_name == "Link":
-        update_linkports_component_attrs(network, where=dataframe)
-
-    # Clean dataframe and ensure correct types
-    dataframe = pd.DataFrame(dataframe)
-    dataframe.index = dataframe.index.astype(str)
-
-    for k in static_attrs.index:
-        if k not in dataframe.columns:
-            dataframe[k] = static_attrs.at[k, "default"]
-        else:
-            if static_attrs.at[k, "type"] == "string":
-                dataframe[k] = dataframe[k].replace({np.nan: ""})
-            if static_attrs.at[k, "type"] == "int":
-                dataframe[k] = dataframe[k].fillna(0)
-            if dataframe[k].dtype != static_attrs.at[k, "typ"]:
-                if static_attrs.at[k, "type"] == "geometry":
-                    geometry = dataframe[k].replace({"": None, np.nan: None})
-                    dataframe[k] = gpd.GeoSeries.from_wkt(geometry)
-                else:
-                    dataframe[k] = dataframe[k].astype(static_attrs.at[k, "typ"])
-
-    # check all the buses are well-defined
-    for attr in [attr for attr in dataframe if attr.startswith("bus")]:
-        # allow empty buses for multi-ports
-        port = int(attr[-1]) if attr[-1].isdigit() else 0
-        mask = ~dataframe[attr].isin(network.buses.index)
-        if port > 1:
-            mask &= dataframe[attr].ne("")
-        missing = dataframe.index[mask]
-        if len(missing) > 0:
-            logger.warning(
-                "The following %s have buses which are not defined:\n%s",
-                cls_name,
-                missing,
-            )
-
-    non_static_attrs_in_df = non_static_attrs.index.intersection(dataframe.columns)
-    old_df = network.df(cls_name)
-    new_df = dataframe.drop(non_static_attrs_in_df, axis=1)
-    if not old_df.empty:
-        new_df = pd.concat((old_df, new_df), sort=False)
-
-    if not new_df.index.is_unique:
-        logger.error(f"Error, new components for {cls_name} are not unique")
-        return
-
-    if cls_name == "Shape":
-        new_df = gpd.GeoDataFrame(new_df, crs=network.crs)
-
-    new_df.index.name = cls_name
-    setattr(network, network.components[cls_name]["list_name"], new_df)
-
-    # now deal with time-dependent properties
-
-    pnl = network.pnl(cls_name)
-
-    for k in non_static_attrs_in_df:
-        # If reading in outputs, fill the outputs
-        pnl[k] = pnl[k].reindex(
-            columns=new_df.index, fill_value=non_static_attrs.at[k, "default"]
-        )
-        pnl[k].loc[:, dataframe.index] = dataframe.loc[:, k].values
-
-    setattr(network, network.components[cls_name]["list_name"] + "_t", pnl)
+    _import_components_from_df(n, dataframe, cls_name)
 
 
+@deprecated(
+    deprecated_in="0.29",
+    removed_in="1.0",
+    details="Use `n.add` instead.",
+)
 def import_series_from_dataframe(
-    network: Network, dataframe: pd.DataFrame, cls_name: str, attr: str
+    n: Network, dataframe: pd.DataFrame, cls_name: str, attr: str
 ) -> None:
     """
     Import time series from a pandas DataFrame.
 
+    This function is deprecated. Use :py:meth:`pypsa.Network.add` instead, but it will
+    not work with the same data structure. To get a similar behavior, use
+    `n.dynamic(class_name)[attr] = df` but make sure that the index is aligned. Also note
+    that this is overwriting the attribute dataframe, not adding to it as before.
+    It is better to use :py:meth:`pypsa.Network.add` to import time series data.
+
     Parameters
     ----------
     dataframe : pandas.DataFrame
-        A DataFrame whose index is ``network.snapshots`` and
+        A DataFrame whose index is ``n.snapshots`` and
         whose columns are a subset of the relevant components.
     cls_name : string
         Name of class of component
@@ -1066,63 +1049,213 @@ def import_series_from_dataframe(
     Examples
     --------
     >>> import numpy as np
-    >>> network.set_snapshots(range(10))
-    >>> network.import_series_from_dataframe(
-            pd.DataFrame(np.random.rand(10, 4),
-                columns=network.generators.index,
-                            index=range(10)),
-                        "Generator",
-                        "p_max_pu")
+    >>> n.set_snapshots(range(10))
+    >>> n.import_series_from_dataframe(
+    ...     pd.DataFrame(np.random.rand(10, 4),
+    ...         columns=n.generators.index,
+    ...                     index=range(10)),
+    ...                 "Generator",
+    ...                 "p_max_pu")
 
-    See Also
     --------
-    pypsa.Network.madd()
     """
-    df = network.df(cls_name)
-    pnl = network.pnl(cls_name)
-    list_name = network.components[cls_name]["list_name"]
+    _import_series_from_df(n, dataframe, cls_name, attr)
 
-    dataframe.columns.name = cls_name
-    dataframe.index.name = "snapshot"
-    diff = dataframe.columns.difference(df.index)
+
+def _import_components_from_df(
+    n: Network, df: pd.DataFrame, cls_name: str, overwrite: bool = False
+) -> None:
+    """
+    Import components from a pandas DataFrame.
+
+    If columns are missing then defaults are used.
+
+    If extra columns are added, these are left in the resulting component dataframe.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A DataFrame whose index is the names of the components and
+        whose columns are the non-default attributes.
+    cls_name : string
+        Name of class of component, e.g. ``"Line", "Bus", "Generator", "StorageUnit"``
+    """
+    attrs = n.components[cls_name]["attrs"]
+
+    static_attrs = attrs[attrs.static].drop("name")
+    non_static_attrs = attrs[~attrs.static]
+
+    if cls_name == "Link":
+        update_linkports_component_attrs(n, where=df)
+
+    # Clean dataframe and ensure correct types
+    df = pd.DataFrame(df)
+    df.index = df.index.astype(str)
+
+    # Fill nan values with default values
+    df = df.fillna(attrs["default"].to_dict())
+
+    for k in static_attrs.index:
+        if k not in df.columns:
+            df[k] = static_attrs.at[k, "default"]
+        else:
+            if static_attrs.at[k, "type"] == "string":
+                df[k] = df[k].replace({np.nan: ""})
+            if static_attrs.at[k, "type"] == "int":
+                df[k] = df[k].fillna(0)
+            if df[k].dtype != static_attrs.at[k, "typ"]:
+                if static_attrs.at[k, "type"] == "geometry":
+                    geometry = df[k].replace({"": None, np.nan: None})
+                    from shapely.geometry.base import BaseGeometry
+
+                    if geometry.apply(lambda x: isinstance(x, BaseGeometry)).all():
+                        df[k] = gpd.GeoSeries(geometry)
+                    else:
+                        df[k] = gpd.GeoSeries.from_wkt(geometry)
+                else:
+                    df[k] = df[k].astype(static_attrs.at[k, "typ"])
+
+    # check all the buses are well-defined
+    # TODO use func from consistency checks
+    for attr in [attr for attr in df if attr.startswith("bus")]:
+        # allow empty buses for multi-ports
+        port = int(attr[-1]) if attr[-1].isdigit() else 0
+        mask = ~df[attr].isin(n.buses.index)
+        if port > 1:
+            mask &= df[attr].ne("")
+        missing = df.index[mask]
+        if len(missing) > 0:
+            logger.warning(
+                "The following %s have buses which are not defined:\n%s",
+                cls_name,
+                missing,
+            )
+
+    non_static_attrs_in_df = non_static_attrs.index.intersection(df.columns)
+    old_static = n.static(cls_name)
+    new_static = df.drop(non_static_attrs_in_df, axis=1)
+
+    # Handle duplicates
+    duplicated_components = old_static.index.intersection(new_static.index)
+    if len(duplicated_components) > 0:
+        if not overwrite:
+            logger.warning(
+                "The following %s are already defined and will be skipped "
+                "(use overwrite=True to overwrite): %s",
+                n.components[cls_name]["list_name"],
+                ", ".join(duplicated_components),
+            )
+            new_static = new_static.drop(duplicated_components)
+        else:
+            old_static = old_static.drop(duplicated_components)
+
+    # Concatenate to new dataframe
+    if not old_static.empty:
+        new_static = pd.concat((old_static, new_static), sort=False)
+
+    if cls_name == "Shape":
+        new_static = gpd.GeoDataFrame(new_static, crs=n.crs)
+
+    # Align index (component names) and columns (attributes)
+    new_static = _sort_attrs(new_static, attrs.index, axis=1)
+
+    new_static.index.name = cls_name
+    setattr(n, n.components[cls_name]["list_name"], new_static)
+
+    # Now deal with time-dependent properties
+
+    dynamic = n.dynamic(cls_name)
+
+    for k in non_static_attrs_in_df:
+        # If reading in outputs, fill the outputs
+        dynamic[k] = dynamic[k].reindex(
+            columns=new_static.index, fill_value=non_static_attrs.at[k, "default"]
+        )
+        if overwrite:
+            dynamic[k].loc[:, df.index] = df.loc[:, k].values
+        else:
+            new_components = df.index.difference(duplicated_components)
+            dynamic[k].loc[:, new_components] = df.loc[new_components, k].values
+
+    setattr(n, n.components[cls_name]["list_name"] + "_t", dynamic)
+
+
+def _import_series_from_df(
+    n: Network,
+    df: pd.DataFrame,
+    cls_name: str,
+    attr: str,
+    overwrite: bool = False,
+) -> None:
+    """
+    Import time series from a pandas DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        A DataFrame whose index is ``n.snapshots`` and
+        whose columns are a subset of the relevant components.
+    cls_name : string
+        Name of class of component
+    attr : string
+        Name of time-varying series attribute
+    """
+    static = n.static(cls_name)
+    dynamic = n.dynamic(cls_name)
+    list_name = n.components[cls_name]["list_name"]
+
+    if not overwrite:
+        try:
+            df = df.drop(df.columns.intersection(dynamic[attr].columns), axis=1)
+        except KeyError:
+            pass  # Don't drop any columns if the data doesn't exist yet
+
+    df.columns.name = cls_name
+    df.index.name = "snapshot"
+
+    # Check if components exist in static df
+    diff = df.columns.difference(static.index)
     if len(diff) > 0:
         logger.warning(
             f"Components {diff} for attribute {attr} of {cls_name} "
             f"are not in main components dataframe {list_name}"
         )
 
-    attrs = network.components[cls_name]["attrs"]
+    # Get all attributes for the component
+    attrs = n.components[cls_name]["attrs"]
+
+    # Add all unknown attributes to the dataframe without any checks
     expected_attrs = attrs[lambda ds: ds.type.str.contains("series")].index
     if attr not in expected_attrs:
-        pnl[attr] = dataframe
+        if overwrite or attr not in dynamic:
+            dynamic[attr] = df
         return
 
-    attr_series = attrs.loc[attr]
-    default = attr_series.default
-    columns = dataframe.columns
-
-    diff = network.snapshots.difference(dataframe.index)
+    # Check if any snapshots are missing
+    diff = n.snapshots.difference(df.index)
     if len(diff):
         logger.warning(
             f"Snapshots {diff} are missing from {attr} of {cls_name}."
-            f" Filling with default value '{default}'"
+            f" Filling with default value '{attrs.loc[attr].default}'"
         )
-        dataframe = dataframe.reindex(network.snapshots, fill_value=default)
+        df = df.reindex(n.snapshots, fill_value=attrs.loc[attr].default)
 
-    if not attr_series.static:
-        pnl[attr] = pnl[attr].reindex(
-            columns=df.index.union(columns), fill_value=default
+    if not attrs.loc[attr].static:
+        dynamic[attr] = dynamic[attr].reindex(
+            columns=df.columns.union(static.index),
+            fill_value=attrs.loc[attr].default,
         )
     else:
-        pnl[attr] = pnl[attr].reindex(columns=(pnl[attr].columns.union(columns)))
+        dynamic[attr] = dynamic[attr].reindex(
+            columns=(df.columns.union(dynamic[attr].columns))
+        )
 
-    pnl[attr].loc[network.snapshots, columns] = dataframe.loc[
-        network.snapshots, columns
-    ]
+    dynamic[attr].loc[n.snapshots, df.columns] = df.loc[n.snapshots, df.columns]
 
 
+@deprecated_common_kwargs
 def merge(
-    network: Network,
+    n: Network,
     other: Network,
     components_to_skip: Collection[str] | None = None,
     inplace: bool = False,
@@ -1135,21 +1268,21 @@ def merge(
     merged, identical snapshots and snapshot weightings.
 
     If a component in ``other`` does not have values for attributes present in
-    ``network``, default values are set.
+    ``n``, default values are set.
 
     If a component in ``other`` has attributes which are not present in
-    ``network`` these attributes are ignored.
+    ``n`` these attributes are ignored.
 
     Parameters
     ----------
-    network : pypsa.Network
+    n : pypsa.Network
         Network to add to.
     other : pypsa.Network
         Network to add from.
     components_to_skip : list-like, default None
         List of names of components which are not to be merged e.g. "Bus"
     inplace : bool, default False
-        If True, merge into ``network`` in-place, otherwise a copy is made.
+        If True, merge into ``n`` in-place, otherwise a copy is made.
     with_time : bool, default True
         If False, only static data is merged.
 
@@ -1165,36 +1298,35 @@ def merge(
     # ensure buses are merged first
     to_iterate_list = ["Bus"] + sorted(to_iterate - {"Bus"})
     for c in other.iterate_components(to_iterate_list):
-        if not c.df.index.intersection(network.df(c.name).index).empty:
+        if not c.static.index.intersection(n.static(c.name).index).empty:
             msg = f"Component {c.name} has overlapping indices, cannot merge networks."
             raise ValueError(msg)
     if with_time:
-        snapshots_aligned = network.snapshots.equals(other.snapshots)
-        weightings_aligned = network.snapshot_weightings.equals(
-            other.snapshot_weightings
-        )
+        snapshots_aligned = n.snapshots.equals(other.snapshots)
+        weightings_aligned = n.snapshot_weightings.equals(other.snapshot_weightings)
         if not (snapshots_aligned and weightings_aligned):
             msg = (
                 "Snapshots or snapshot weightings do not agree, cannot merge networks."
             )
             raise ValueError(msg)
-    new = network if inplace else network.copy()
+    new = n if inplace else n.copy()
     if other.srid != new.srid:
         logger.warning(
             "Spatial Reference System Indentifier of networks do not agree: "
             f"{new.srid}, {other.srid}. Assuming {new.srid}."
         )
     for c in other.iterate_components(to_iterate_list):
-        new.import_components_from_dataframe(c.df, c.name)
+        new._import_components_from_df(c.static, c.name)
         if with_time:
-            for k, v in c.pnl.items():
-                new.import_series_from_dataframe(v, c.name, k)
+            for k, v in c.dynamic.items():
+                new._import_series_from_df(v, c.name, k)
 
     return None if inplace else new
 
 
+@deprecated_common_kwargs
 def import_from_pypower_ppc(
-    network: Network, ppc: dict, overwrite_zero_s_nom: float | None = None
+    n: Network, ppc: dict, overwrite_zero_s_nom: float | None = None
 ) -> None:
     """
     Import network from PYPOWER PPC dictionary format version 2.
@@ -1212,7 +1344,7 @@ def import_from_pypower_ppc(
     --------
     >>> from pypower.api import case30
     >>> ppc = case30()
-    >>> network.import_from_pypower_ppc(ppc)
+    >>> n.import_from_pypower_ppc(ppc)
     """
     version = ppc["version"]
     if int(version) != 2:
@@ -1392,20 +1524,19 @@ def import_from_pypower_ppc(
         "Transformer",
         "ShuntImpedance",
     ]:
-        import_components_from_dataframe(
-            network, pdf[network.components[component]["list_name"]], component
+        _import_components_from_df(
+            n, pdf[n.components[component]["list_name"]], component
         )
 
-    network.generators["control"] = network.generators.bus.map(network.buses["control"])
+    n.generators["control"] = n.generators.bus.map(n.buses["control"])
 
     # for consistency with pypower, take the v_mag set point from the generators
-    network.buses.loc[network.generators.bus, "v_mag_pu_set"] = np.asarray(
-        network.generators["v_set_pu"]
-    )
+    n.buses.loc[n.generators.bus, "v_mag_pu_set"] = np.asarray(n.generators["v_set_pu"])
 
 
+@deprecated_common_kwargs
 def import_from_pandapower_net(
-    network: Network,
+    n: Network,
     net: pandapowerNet,
     extra_line_data: bool = False,
     use_pandapower_index: bool = False,
@@ -1433,14 +1564,14 @@ def import_from_pandapower_net(
 
     Examples
     --------
-    >>> network.import_from_pandapower_net(net)
+    >>> n.import_from_pandapower_net(net)
     OR
     >>> import pypsa
     >>> import pandapower as pp
     >>> import pandapower.networks as pn
     >>> net = pn.create_cigre_network_mv(with_der='all')
-    >>> network = pypsa.Network()
-    >>> network.import_from_pandapower_net(net, extra_line_data=True)
+    >>> n = pypsa.Network()
+    >>> n.import_from_pandapower_net(net, extra_line_data=True)
     """
     logger.warning(
         "Warning: Importing from pandapower is still in beta; not all pandapower data is supported.\nUnsupported features include: three-winding transformers, switches, in_service status, shunt impedances and tap positions of transformers."
@@ -1609,7 +1740,7 @@ def import_from_pandapower_net(
         "Transformer",
         "ShuntImpedance",
     ]:
-        network.import_components_from_dataframe(d[component_name], component_name)
+        n._import_components_from_df(d[component_name], component_name)
 
     # amalgamate buses connected by closed switches
 
@@ -1621,13 +1752,11 @@ def import_from_pandapower_net(
     to_replace = pd.Series(bus_switches.stays.values, bus_switches.goes.values)
 
     for i in to_replace.index:
-        network.remove("Bus", i)
+        n.remove("Bus", i)
 
-    for component in network.iterate_components(
-        {"Load", "Generator", "ShuntImpedance"}
-    ):
-        component.df.replace({"bus": to_replace}, inplace=True)
+    for component in n.iterate_components({"Load", "Generator", "ShuntImpedance"}):
+        component.static.replace({"bus": to_replace}, inplace=True)
 
-    for component in network.iterate_components({"Line", "Transformer"}):
-        component.df.replace({"bus0": to_replace}, inplace=True)
-        component.df.replace({"bus1": to_replace}, inplace=True)
+    for component in n.iterate_components({"Line", "Transformer"}):
+        component.static.replace({"bus0": to_replace}, inplace=True)
+        component.static.replace({"bus1": to_replace}, inplace=True)

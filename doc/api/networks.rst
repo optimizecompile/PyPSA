@@ -17,13 +17,17 @@ General methods
     :toctree: _source/
 
     ~pypsa.Network.read_in_default_standard_types
+    ~pypsa.Network.static
     ~pypsa.Network.df
+    ~pypsa.Network.dynamic
     ~pypsa.Network.pnl
     ~pypsa.Network.to_crs
     ~pypsa.Network.set_snapshots
     ~pypsa.Network.set_investment_periods
     ~pypsa.Network.add
+    ~pypsa.Network.madd
     ~pypsa.Network.remove
+    ~pypsa.Network.mremove
     ~pypsa.Network.copy
     ~pypsa.Network.branches
     ~pypsa.Network.passive_branches

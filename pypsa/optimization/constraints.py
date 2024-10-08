@@ -25,6 +25,7 @@ from pypsa.descriptors import (
 )
 from pypsa.descriptors import get_switchable_as_dense as get_as_dense
 from pypsa.optimization.common import reindex
+from pypsa.utils import as_index
 
 if TYPE_CHECKING:
     from xarray import DataArray
@@ -60,7 +61,7 @@ def define_operational_constraints_for_non_extendables(
     if fix_i.empty:
         return
 
-    nominal_fix = n.df(c)[nominal_attrs[c]].reindex(fix_i)
+    nominal_fix = n.static(c)[nominal_attrs[c]].reindex(fix_i)
     min_pu, max_pu = get_bounds_pu(n, c, sns, fix_i, attr)
     lower = min_pu.mul(nominal_fix)
     upper = max_pu.mul(nominal_fix)
@@ -158,18 +159,18 @@ def define_operational_constraints_for_committables(
     active = get_activity_mask(n, c, sns, com_i)
 
     # parameters
-    nominal = DataArray(n.df(c)[nominal_attrs[c]].reindex(com_i))
+    nominal = DataArray(n.static(c)[nominal_attrs[c]].reindex(com_i))
     min_pu, max_pu = map(DataArray, get_bounds_pu(n, c, sns, com_i, "p"))
     lower_p = min_pu * nominal
     upper_p = max_pu * nominal
-    min_up_time_set = n.df(c).min_up_time[com_i]
-    min_down_time_set = n.df(c).min_down_time[com_i]
-    ramp_up_limit = nominal * n.df(c).ramp_limit_up[com_i].fillna(1)
-    ramp_down_limit = nominal * n.df(c).ramp_limit_down[com_i].fillna(1)
-    ramp_start_up = nominal * n.df(c).ramp_limit_start_up[com_i]
-    ramp_shut_down = nominal * n.df(c).ramp_limit_shut_down[com_i]
-    up_time_before_set = n.df(c)["up_time_before"].reindex(com_i)
-    down_time_before_set = n.df(c)["down_time_before"].reindex(com_i)
+    min_up_time_set = n.static(c).min_up_time[com_i]
+    min_down_time_set = n.static(c).min_down_time[com_i]
+    ramp_up_limit = nominal * n.static(c).ramp_limit_up[com_i].fillna(1)
+    ramp_down_limit = nominal * n.static(c).ramp_limit_down[com_i].fillna(1)
+    ramp_start_up = nominal * n.static(c).ramp_limit_start_up[com_i]
+    ramp_shut_down = nominal * n.static(c).ramp_limit_shut_down[com_i]
+    up_time_before_set = n.static(c)["up_time_before"].reindex(com_i)
+    down_time_before_set = n.static(c)["down_time_before"].reindex(com_i)
     initially_up = up_time_before_set.astype(bool)
     initially_down = down_time_before_set.astype(bool)
 
@@ -177,7 +178,7 @@ def define_operational_constraints_for_committables(
     if sns[0] != n.snapshots[0]:
         start_i = n.snapshots.get_loc(sns[0])
         # get generators which are online until the first regarded snapshot
-        until_start_up = n.pnl(c).status.iloc[:start_i][::-1].reindex(columns=com_i)
+        until_start_up = n.dynamic(c).status.iloc[:start_i][::-1].reindex(columns=com_i)
         ref = range(1, len(until_start_up) + 1)
         up_time_before = until_start_up[until_start_up.cumsum().eq(ref, axis=0)].sum()
         up_time_before_set = up_time_before.clip(upper=min_up_time_set)
@@ -260,7 +261,8 @@ def define_operational_constraints_for_committables(
 
     # linearized approximation because committable can partly start up and shut down
     cost_equal = all(
-        n.df(c).loc[com_i, "start_up_cost"] == n.df(c).loc[com_i, "shut_down_cost"]
+        n.static(c).loc[com_i, "start_up_cost"]
+        == n.static(c).loc[com_i, "shut_down_cost"]
     )
     # only valid additional constraints if start up costs equal to shut down costs
     if n._linearized_uc and not cost_equal:
@@ -334,8 +336,8 @@ def define_nominal_constraints_for_extendables(n: Network, c: str, attr: str) ->
         return
 
     capacity = n.model[f"{c}-{attr}"]
-    lower = n.df(c)[attr + "_min"].reindex(ext_i)
-    upper = n.df(c)[attr + "_max"].reindex(ext_i)
+    lower = n.static(c)[attr + "_min"].reindex(ext_i)
+    upper = n.static(c)[attr + "_max"].reindex(ext_i)
     mask = upper != inf
     n.model.add_constraints(capacity, ">=", lower, name=f"{c}-ext-{attr}-lower")
     n.model.add_constraints(
@@ -355,7 +357,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
     """
     m = n.model
 
-    if {"ramp_limit_up", "ramp_limit_down"}.isdisjoint(n.df(c)):
+    if {"ramp_limit_up", "ramp_limit_down"}.isdisjoint(n.static(c)):
         return
 
     ramp_limit_up = get_as_dense(n, c, "ramp_limit_up", sns)
@@ -368,17 +370,19 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
     # ---------------- Check if ramping is at start of n.snapshots --------------- #
 
-    pnl = n.pnl(c)
-    attr = {"p", "p0"}.intersection(pnl).pop()  # dispatch for either one or two ports
+    dynamic = n.dynamic(c)
+    attr = {"p", "p0"}.intersection(
+        dynamic
+    ).pop()  # dispatch for either one or two ports
     start_i = n.snapshots.get_loc(sns[0]) - 1
-    p_start = pnl[attr].iloc[start_i]
+    p_start = dynamic[attr].iloc[start_i]
 
     is_rolling_horizon = (sns[0] != n.snapshots[0]) and not p_start.empty
     p = m[f"{c}-p"]
 
     if is_rolling_horizon:
         active = get_activity_mask(n, c, sns)
-        rhs_start = pd.DataFrame(0.0, index=sns, columns=n.df(c).index)
+        rhs_start = pd.DataFrame(0.0, index=sns, columns=n.static(c).index)
         rhs_start.loc[sns[0]] = p_start
 
         def p_actual(idx: pd.Index) -> DataArray:
@@ -389,7 +393,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
     else:
         active = get_activity_mask(n, c, sns[1:])
-        rhs_start = pd.DataFrame(0, index=sns[1:], columns=n.df(c).index)
+        rhs_start = pd.DataFrame(0, index=sns[1:], columns=n.static(c).index)
         rhs_start.index.name = "snapshot"
 
         def p_actual(idx: pd.Index) -> DataArray:
@@ -405,9 +409,9 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
     # ----------------------------- Fixed Generators ----------------------------- #
 
-    assets = n.df(c).reindex(fix_i)
+    assets = n.static(c).reindex(fix_i)
 
-    p_nom = n.df(c)[nominal_attrs[c]].reindex(fix_i)
+    p_nom = n.static(c)[nominal_attrs[c]].reindex(fix_i)
 
     # fix up
     if not ramp_limit_up[fix_i].isnull().all().all():
@@ -437,7 +441,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
     # ----------------------------- Extendable Generators ----------------------------- #
 
-    assets = n.df(c).reindex(ext_i)
+    assets = n.static(c).reindex(ext_i)
 
     # ext up
     if not ramp_limit_up[ext_i].isnull().all().all():
@@ -467,7 +471,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
     # ----------------------------- Committable Generators ----------------------------- #
 
-    assets = n.df(c).reindex(com_i)
+    assets = n.static(c).reindex(com_i)
 
     # com up
     if not assets.ramp_limit_up.isnull().all():
@@ -486,7 +490,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
         rhs = rhs_start.reindex(columns=com_i)
         if is_rolling_horizon:
-            status_start = n.pnl(c)["status"][com_i].iloc[start_i]
+            status_start = n.dynamic(c)["status"][com_i].iloc[start_i]
             rhs.loc[sns[0]] += (limit_up - limit_start) * status_start
 
         mask = active.reindex(columns=com_i) & assets.ramp_limit_up.notnull()
@@ -511,7 +515,7 @@ def define_ramp_limit_constraints(n: Network, sns: pd.Index, c: str, attr: str) 
 
         rhs = rhs_start.reindex(columns=com_i)
         if is_rolling_horizon:
-            status_start = n.pnl(c)["status"][com_i].iloc[start_i]
+            status_start = n.dynamic(c)["status"][com_i].iloc[start_i]
             rhs.loc[sns[0]] += -limit_shut * status_start
 
         mask = active.reindex(columns=com_i) & assets.ramp_limit_down.notnull()
@@ -568,15 +572,15 @@ def define_nodal_balance_constraints(
     for arg in args:
         c, attr, column, sign = arg
 
-        if n.df(c).empty:
+        if n.static(c).empty:
             continue
 
-        if "sign" in n.df(c):
+        if "sign" in n.static(c):
             # additional sign necessary for branches in reverse direction
-            sign = sign * n.df(c).sign
+            sign = sign * n.static(c).sign
 
         expr = DataArray(sign) * m[f"{c}-{attr}"]
-        cbuses = n.df(c)[column][lambda ds: ds.isin(buses)].rename("Bus")
+        cbuses = n.static(c)[column][lambda ds: ds.isin(buses)].rename("Bus")
 
         #  drop non-existent multiport buses which are ''
         if column in ["bus" + i for i in additional_linkports(n)]:
@@ -624,7 +628,7 @@ def define_kirchhoff_voltage_constraints(n: Network, sns: pd.Index) -> None:
     m = n.model
     n.calculate_dependent_values()
 
-    comps = [c for c in n.passive_branch_components if not n.df(c).empty]
+    comps = [c for c in n.passive_branch_components if not n.static(c).empty]
 
     if not comps:
         return
@@ -642,15 +646,15 @@ def define_kirchhoff_voltage_constraints(n: Network, sns: pd.Index) -> None:
         snapshots = sns if period is None else sns[sns.get_loc(period)]
 
         exprs_list = []
-        for sub in n.sub_networks.obj:
-            branches = sub.branches()
+        for sub_network in n.sub_networks.obj:
+            branches = sub_network.branches()
 
-            if not sub.C.size:
+            if not sub_network.C.size:
                 continue
 
-            carrier = n.sub_networks.carrier[sub.name]
+            carrier = n.sub_networks.carrier[sub_network.name]
             weightings = branches.x_pu_eff if carrier == "AC" else branches.r_pu_eff
-            C = 1e5 * sparse.diags(weightings.values) * sub.C
+            C = 1e5 * sparse.diags(weightings.values) * sub_network.C
             ssub = s.loc[snapshots, branches.index].values
 
             ncycles = C.shape[1]
@@ -679,7 +683,7 @@ def define_kirchhoff_voltage_constraints(n: Network, sns: pd.Index) -> None:
 def define_fixed_nominal_constraints(n: Network, c: str, attr: str) -> None:
     """
     Sets constraints for fixing static variables of a given component and
-    attribute to the corresponding values in `n.df(c)[attr + '_set']`.
+    attribute to the corresponding values in `n.static(c)[attr + '_set']`.
 
     Parameters
     ----------
@@ -689,11 +693,11 @@ def define_fixed_nominal_constraints(n: Network, c: str, attr: str) -> None:
     attr : str
         name of the attribute, e.g. 'p'
     """
-    if attr + "_set" not in n.df(c):
+    if attr + "_set" not in n.static(c):
         return
 
     dim = f"{c}-{attr}_set_i"
-    fix = n.df(c)[attr + "_set"].dropna().rename_axis(dim)
+    fix = n.static(c)[attr + "_set"].dropna().rename_axis(dim)
 
     if fix.empty:
         return
@@ -718,13 +722,13 @@ def define_modular_constraints(n: Network, c: str, attr: str) -> None:
         name of the variable, e.g. 'n_opt'
     """
     m = n.model
-    mod_i = n.df(c).query(f"{attr}_extendable and ({attr}_mod>0)").index
+    mod_i = n.static(c).query(f"{attr}_extendable and ({attr}_mod>0)").index
 
     if (mod_i).empty:
         return
 
     modularity = m.variables[f"{c}-n_mod"]
-    modular_capacity = n.df(c)[f"{attr}_mod"].loc[mod_i]
+    modular_capacity = n.static(c)[f"{attr}_mod"].loc[mod_i]
     capacity = m.variables[f"{c}-{attr}"].loc[mod_i]
 
     con = capacity - modularity * modular_capacity.values == 0
@@ -736,7 +740,7 @@ def define_fixed_operation_constraints(
 ) -> None:
     """
     Sets constraints for fixing time-dependent variables of a given component
-    and attribute to the corresponding values in `n.pnl(c)[attr + '_set']`.
+    and attribute to the corresponding values in `n.dynamic(c)[attr + '_set']`.
 
     Parameters
     ----------
@@ -746,11 +750,11 @@ def define_fixed_operation_constraints(
     attr : str
         name of the attribute, e.g. 'p'
     """
-    if attr + "_set" not in n.pnl(c):
+    if attr + "_set" not in n.dynamic(c):
         return
 
     dim = f"{c}-{attr}_set_i"
-    fix = n.pnl(c)[attr + "_set"].reindex(index=sns).rename_axis(columns=dim)
+    fix = n.dynamic(c)[attr + "_set"].reindex(index=sns).rename_axis(columns=dim)
     fix.index.name = "snapshot"  # still necessary: reindex loses the index name
 
     if fix.empty:
@@ -773,7 +777,7 @@ def define_storage_unit_constraints(n: Network, sns: pd.Index) -> None:
     m = n.model
     c = "StorageUnit"
     dim = "snapshot"
-    assets = n.df(c)
+    assets = n.static(c)
     active = DataArray(get_activity_mask(n, c, sns))
 
     if assets.empty:
@@ -862,7 +866,7 @@ def define_store_constraints(n: Network, sns: pd.Index) -> None:
     m = n.model
     c = "Store"
     dim = "snapshot"
-    assets = n.df(c)
+    assets = n.static(c)
     active = DataArray(get_activity_mask(n, c, sns))
 
     if assets.empty:
@@ -929,7 +933,7 @@ def define_store_constraints(n: Network, sns: pd.Index) -> None:
 def define_loss_constraints(
     n: Network, sns: pd.Index, c: str, transmission_losses: int
 ) -> None:
-    if n.df(c).empty or c not in n.passive_branch_components:
+    if n.static(c).empty or c not in n.passive_branch_components:
         return
 
     tangents = transmission_losses
@@ -937,8 +941,8 @@ def define_loss_constraints(
 
     s_max_pu = get_as_dense(n, c, "s_max_pu").loc[sns]
 
-    s_nom_max = n.df(c)["s_nom_max"].where(
-        n.df(c)["s_nom_extendable"], n.df(c)["s_nom"]
+    s_nom_max = n.static(c)["s_nom_max"].where(
+        n.static(c)["s_nom_extendable"], n.static(c)["s_nom"]
     )
 
     if not isfinite(s_nom_max).all():
@@ -948,7 +952,7 @@ def define_loss_constraints(
         )
         raise ValueError(msg)
 
-    r_pu_eff = n.df(c)["r_pu_eff"]
+    r_pu_eff = n.static(c)["r_pu_eff"]
 
     upper_limit = r_pu_eff * (s_max_pu * s_nom_max) ** 2
 
@@ -969,3 +973,57 @@ def define_loss_constraints(
             n.model.add_constraints(
                 lhs >= offset_k, name=f"{c}-loss_tangents-{k}-{sign}", mask=active
             )
+
+
+def define_generator_constraints(n: Network, sns: Sequence) -> None:
+    """
+    Defines energy sum constraints for generators in the network model.
+
+    This function adds constraints to the network model to ensure that the total
+    energy generated by each generator over the specified snapshots meets the
+    minimum and maximum energy sum requirements.
+
+    Added constraints:
+    - Minimum Energy Sum (e_sum_min): Ensures that the total energy generated by
+      each generator over the specified snapshots is at least the minimum energy
+      sum specified.
+    - Maximum Energy Sum (e_sum_max): Ensures that the total energy generated by
+      each generator over the specified snapshots does not exceed the maximum
+      energy sum specified.
+
+    Parameters
+    ----------
+    n : pypsa.Network
+        The network object containing the model and generator data.
+    sns : Sequence
+        A list of snapshots (time steps) over which the constraints are applied.
+
+    Returns
+    -------
+    None
+
+    """
+
+    sns_ = as_index(n, sns, "snapshots", "snapshot")
+
+    m = n.model
+    c = "Generator"
+    static = n.static(c)
+
+    if static.empty:
+        return
+
+    # elapsed hours
+    eh = expand_series(n.snapshot_weightings.generators[sns_], static.index)
+
+    e_sum_min_set = static[static.e_sum_min >= 0].index
+    e = m[f"{c}-p"].loc[sns_, e_sum_min_set].mul(eh).sum(dim="snapshot")
+    e_sum_min = n.static(c).loc[e_sum_min_set, "e_sum_min"]
+
+    m.add_constraints(e, ">=", e_sum_min, name=f"{c}-e_sum_min")
+
+    e_sum_max_set = static[static.e_sum_max >= 0].index
+    e = m[f"{c}-p"].loc[sns_, e_sum_max_set].mul(eh).sum(dim="snapshot")
+    e_sum_max = n.static(c).loc[e_sum_max_set, "e_sum_max"]
+
+    m.add_constraints(e, "<=", e_sum_max, name=f"{c}-e_sum_max")

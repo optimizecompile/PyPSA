@@ -136,6 +136,8 @@ Global constraints are added to the optimization problems created by
    :file: ../../pypsa/component_attrs/global_constraints.csv
 
 
+.. _component-generator:
+
 Generator
 =========
 
@@ -323,8 +325,8 @@ The following standard line types are available:
 The line type parameters intable above are based on `pandapower's standard types
 <https://pandapower.readthedocs.io/en/latest/std_types/basic.html>`__, whose
 parameterisation is in turn loosely based on `DIgSILENT PowerFactory
-<http://www.digsilent.de/index.php/products-powerfactory.html>`_.
-
+<http://www.digsilent.de/index.php/products-powerfactory.html>`_. 
+The parametrisation of lines is supplemented by additional sources such as `JAO's Static Grid Model <https://www.jao.eu/static-grid-model>`_.
 
 Transformer
 ===========
