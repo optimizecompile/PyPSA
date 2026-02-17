@@ -53,6 +53,11 @@ SPDX-License-Identifier: CC-BY-4.0
 
 - Add support for pandas 3.0, while maintaining compatibility with pandas 2.x. (<!-- md:pr 1556 -->)
 
+- Components can now be both committable and extendable simultaneously. This enables unit commitment with capacity expansion optimization using a big-M formulation that maintains the linear programming structure.
+
+- Components can now be committable and extendable together with modular capacity expansion. This enables unit commitment on single capacity modules within on asset. The formulation is compatible with start-up and shut-down costs, ramp-up and shut-down limit. The feature is not still compatible with min-up and min-down time, up and down time before.
+
+
 ### Bug Fixes
 
 - **Breaking**: Fix `ramp_limit_start_up` and `ramp_limit_shut_down` being ignored in the very first snapshot in binary unit commitment. The constraints are now properly applied when these attributes are explicitly set. (<!-- md:pr 1553 -->)
@@ -69,6 +74,7 @@ SPDX-License-Identifier: CC-BY-4.0
   - Combining PyPSA with Global Sensitivity Analysis (GSA) methods. See [:material-notebook-multiple: notebook](./examples/gsa.ipynb). (<!-- md:pr 1318 -->)
 
 - Add internal constraint and global constraint functions to the API reference (see <!-- md:api networks/constraints.md -->). (~!-- md:pr 1495 -->)
+
 
 ## [**v1.0.7**](https://github.com/PyPSA/PyPSA/releases/tag/v1.0.7) <small>13th January 2026</small> { id="v1.0.7" }
 
