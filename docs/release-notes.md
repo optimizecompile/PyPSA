@@ -5,13 +5,19 @@ SPDX-License-Identifier: CC-BY-4.0
 -->
 
 # Release Notes
-<!--## Upcoming Release
+## Upcoming Release
 
 !!! info "Upcoming Release"
 
     The features listed below have not yet been released, but will be included in the
     next update! If you would like to use these features in the meantime, you will need
-    to install the `master` branch, e.g. `pip install git+https://github.com/pypsa/pypsa`.-->
+    to install the `master` branch, e.g. `pip install git+https://github.com/pypsa/pypsa`.
+
+### Features
+
+- Add weighted-time delays for Link outputs via new attributes `delay` and `cyclic_delay` (auto-expanded as `delay2`, `delay3`, ... and `cyclic_delay2`, `cyclic_delay3`, ... for additional ports). Delay is interpreted in units of `snapshot_weightings.generators`, with cyclic or non-cyclic boundary behavior.
+
+### Bug Fixes
 
 ## [**v1.1.2**](https://github.com/PyPSA/PyPSA/releases/tag/v1.1.2) <small>23rd February 2026</small> { id="v1.1.2" }
 
@@ -78,6 +84,7 @@ Yanked due to incorrect release from CI pipeline. Use v1.1.2 instead.
 - Fix ramp limit constraints failing with mismatched index for multi-investment-period models with extendable or committable components. (<!-- md:pr 1537 -->)
 - Fix statistics methods raising an error when called with `groupby_time=True`. (<!-- md:pr 1538 -->)
 - Fix spatial clustering filling empty time series with defaults for `aggregate_one_ports`. (<!-- md:pr 1528 -->)
+- Fix link-port attribute expansion (`bus2`, `bus3`, `efficiency2`, ...) mutating shared Link defaults across networks. Additional Link ports are now updated only locally per network instance.
 
 ### Documentation
 
